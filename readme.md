@@ -8,6 +8,9 @@ Once you've updated your exposures, you might consider implementing [Elementary 
 
 ## How It Works
 
+<details>
+<summary>Click to expand: Detailed workflow explanation</summary>
+
 This tool creates a bridge between Looker and dbt by automatically discovering the dependencies between your Looker dashboards/looks and your dbt models. Here's the end-to-end workflow:
 
 ### 1. Read dbt Catalog
@@ -81,6 +84,8 @@ With dbt exposures properly configured:
 - **Documentation**: Automatically document which business users/dashboards depend on your data models
 - **Testing strategy**: Prioritize testing for models that power critical dashboards
 
+</details>
+
 ## Pre-Requisites
 
 Before running this tool, you need:
@@ -96,6 +101,9 @@ Before running this tool, you need:
    - Access merge queries
 
 ## Setup Instructions
+
+<details>
+<summary>Click to expand: Step-by-step setup guide</summary>
 
 ### 1. Clone the Repository
 
@@ -169,6 +177,8 @@ ls -la
 # - catalog.json
 # - requirements.txt
 ```
+
+</details>
 
 ## Usage
 
