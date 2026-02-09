@@ -1,10 +1,77 @@
 import looker_sdk
 import yaml
 import json
-from bigquery_sql_parser.query import Query as ParseBigQuery
+import sqlglot
+from sqlglot import exp
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 sdk = looker_sdk.init40("looker.ini")
+
+def extract_tables_from_sql(sql_text, dialect="databricks"):
+    """
+    Extract fully qualified table names from SQL using sqlglot.
+
+    Args:
+        sql_text: SQL query string
+        dialect: SQL dialect (default: "databricks")
+
+    Returns:
+        List of normalized table name strings
+    """
+    try:
+        tree = sqlglot.parse_one(sql_text, read=dialect)
+    except Exception as e:
+        print(f"Warning: Failed to parse SQL: {str(e)}")
+        return []
+
+    # Get all table references
+    all_tables = tree.find_all(exp.Table)
+
+    # Get CTE names to filter them out (CTEs are temporary, not in catalog)
+    cte_names = {cte.alias.lower() for cte in tree.find_all(exp.CTE)}
+
+    table_names = []
+    for table in all_tables:
+        # Skip CTEs
+        if table.name and table.name.lower() in cte_names:
+            continue
+
+        # Skip temporary tables
+        if table.name and (
+            table.name.lower().startswith('temp_') or
+            table.name.lower().startswith('tmp_') or
+            table.name.lower().startswith('#')
+        ):
+            continue
+
+        # Build fully qualified name from available parts
+        # sqlglot structure: table.catalog, table.db, table.name
+        parts = []
+
+        if table.catalog:  # Unity Catalog: catalog part
+            parts.append(table.catalog)
+
+        if table.db:  # Schema/database (middle part)
+            parts.append(table.db)
+
+        if table.name:  # Table name (required)
+            parts.append(table.name)
+
+        if parts:
+            # Normalize: lowercase and remove quotes/backticks
+            normalized_parts = [part.strip('`"\'').lower() for part in parts]
+            full_name = '.'.join(normalized_parts)
+            table_names.append(full_name)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_tables = []
+    for name in table_names:
+        if name not in seen:
+            seen.add(name)
+            unique_tables.append(name)
+
+    return unique_tables
 
 def parse_manifest():
 
@@ -30,9 +97,23 @@ def parse_manifest():
             sql_database = data["nodes"][node]["metadata"]["database"]
             sql_schema = data["nodes"][node]["metadata"]["schema"]
             sql_name = data["nodes"][node]["metadata"]["name"]
-            sql_full_name = f"{sql_database}.{sql_schema}.{sql_name}"
 
-            dbt_objects_dict[sql_full_name] = node_metadata
+            # Normalize to lowercase for case-insensitive matching
+            sql_database_norm = sql_database.lower()
+            sql_schema_norm = sql_schema.lower()
+            sql_name_norm = sql_name.lower()
+
+            # Create multiple lookup keys for flexibility
+            # 3-part: catalog.schema.table (Unity Catalog)
+            sql_full_name_3part = f"{sql_database_norm}.{sql_schema_norm}.{sql_name_norm}"
+            dbt_objects_dict[sql_full_name_3part] = node_metadata
+
+            # 2-part: schema.table (Hive Metastore)
+            sql_full_name_2part = f"{sql_schema_norm}.{sql_name_norm}"
+            dbt_objects_dict[sql_full_name_2part] = node_metadata
+
+            # 1-part: table (fallback for unqualified references)
+            dbt_objects_dict[sql_name_norm] = node_metadata
 
     return dbt_objects_dict
 
@@ -118,8 +199,7 @@ class Look(LookerObject):
                 query_id = look.query["id"],
                 result_format = "sql"
             )
-            parsed_query = ParseBigQuery(query_sql)
-            table_ids = parsed_query.full_table_ids
+            table_ids = extract_tables_from_sql(query_sql, dialect="databricks")
             self.sql_table_names.extend(table_ids)
         #dedupe list
         self.sql_table_names = list(dict.fromkeys(self.sql_table_names))
@@ -173,8 +253,7 @@ class Dashboard(LookerObject):
                 query_id = query["query_id"],
                 result_format = "sql"
             )
-            parsed_query = ParseBigQuery(query_sql)
-            table_ids = parsed_query.full_table_ids
+            table_ids = extract_tables_from_sql(query_sql, dialect="databricks")
             self.sql_table_names.extend(table_ids)
         #dedupe list
         self.sql_table_names = list(dict.fromkeys(self.sql_table_names))
